@@ -127,3 +127,11 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+data/
+
+.fossil
+.marks/
+bottle.py
+update-ram*.sh
+dbhash
