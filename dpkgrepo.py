@@ -558,9 +558,9 @@ def main(argv):
             db, _url_slash(args.mirror),
             args.branch, args.arch, args.local, args.force
         )
+    db.execute('PRAGMA optimize')
     if not args.no_stats:
         stats_update(db)
-    db.execute('PRAGMA optimize')
     db.commit()
 
 if __name__ == '__main__':
