@@ -496,7 +496,6 @@ def update(db, mirror, branches=None, arch=None, local=False, force=False):
             if arch and repo.architecture != arch:
                 continue
             package_update(db, mirror, repo, path, size, sha256, local)
-    stats_update(db)
 
 def update_sources_list(db, filename, branches=None, arch=None, local=False, force=False):
     with open(filename, 'r', encoding='utf-8') as f:
@@ -519,13 +518,15 @@ def update_sources_list(db, filename, branches=None, arch=None, local=False, for
                 if arch and repo.architecture != arch:
                     continue
                 package_update(db, mirror, repo, path, size, sha256, local)
-    stats_update(db)
 
 def main(argv):
     parser = argparse.ArgumentParser(description="Get package info from DPKG sources.")
     parser.add_argument("-l", "--local", help="Try local apt cache", action='store_true')
     parser.add_argument("-f", "--force", help="Force update", action='store_true')
-    parser.add_argument("-b", "--branch", help="Only get this branch, can be specified multiple times", action='append')
+    parser.add_argument("-n", "--no-stats",
+        help="Don't calculate package stats", action='store_true')
+    parser.add_argument("-b", "--branch",
+        help="Only get this branch, can be specified multiple times", action='append')
     parser.add_argument("-a", "--arch", help="Only get this architecture")
     parser.add_argument("-m", "--mirror",
         help="Set mirror location, https is recommended. "
@@ -557,6 +558,8 @@ def main(argv):
             db, _url_slash(args.mirror),
             args.branch, args.arch, args.local, args.force
         )
+    if not args.no_stats:
+        stats_update(db)
     db.execute('PRAGMA optimize')
     db.commit()
 
