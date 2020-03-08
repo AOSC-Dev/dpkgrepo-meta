@@ -545,8 +545,8 @@ def main(argv):
             os.path.join(os.path.dirname(__file__), 'mod_vercomp.so'))
         db.load_extension(extpath)
     except sqlite3.OperationalError:
-        from utils import version_compare
-        db.create_collation("vercomp", version_compare)
+        logging.error('mod_vercomp.so not found, run `make` first.')
+        sys.exit(1)
     db.enable_load_extension(False)
     init_db(db)
     if args.sources_list:

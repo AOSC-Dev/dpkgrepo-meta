@@ -279,9 +279,6 @@ except ImportError:
     # Lack of typing is not important at runtime
     pass
 
-from debian.deprecation import function_deprecated_by
-import debian.debian_support
-
 try:
     import apt_pkg    # type: ignore
     # This module uses apt_pkg only for its TagFile interface.
@@ -909,14 +906,14 @@ class Deb822(Deb822Dict):
         # type: (str) -> bool
         return not s.count("\n")
 
-    isSingleLine = function_deprecated_by(is_single_line)
+    isSingleLine = is_single_line
 
     @staticmethod
     def is_multi_line(s):
         # type: (str) -> bool
         return not Deb822.is_single_line(s)
 
-    isMultiLine = function_deprecated_by(is_multi_line)
+    isMultiLine = is_multi_line
 
     def _merge_fields(self,
                       s1,   # type: str
@@ -957,7 +954,7 @@ class Deb822(Deb822Dict):
 
         raise ValueError
 
-    _mergeFields = function_deprecated_by(_merge_fields)
+    _mergeFields = _merge_fields
 
     def merge_fields(self,
                      key,       # type: str
@@ -995,7 +992,7 @@ class Deb822(Deb822Dict):
 
         return merged
 
-    mergeFields = function_deprecated_by(merge_fields)
+    mergeFields = merge_fields
 
     @staticmethod
     def split_gpg_and_payload(sequence,         # type: Iterable[bytes]
@@ -1467,7 +1464,7 @@ class _lowercase_dict(dict):
 class _VersionAccessorMixin(object):
     """Give access to Version keys as debian_support.Version objects."""
     def get_version(self):
-        return debian.debian_support.Version(self['Version'])
+        return self['Version']
 
     def set_version(self, version):
         self['Version'] = str(version)
