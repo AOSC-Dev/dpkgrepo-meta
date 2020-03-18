@@ -203,7 +203,6 @@ def download_catalog(url, local=False, timeout=120, ignore404=False):
         try:
             with open('/var/lib/apt/lists/' + filename, 'rb') as f:
                 content = f.read()
-            print(url, local)
             return content
         except FileNotFoundError:
             pass
