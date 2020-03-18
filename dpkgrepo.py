@@ -97,7 +97,7 @@ def _url_slash(url):
         return url
     return url + '/'
 
-def init_db(db):
+def init_db(db, with_stats=True):
     cur = db.cursor()
     cur.execute('CREATE TABLE IF NOT EXISTS dpkg_repos ('
                 'name TEXT PRIMARY KEY,' # key: bsp-sunxi-armel/testing
@@ -151,25 +151,26 @@ def init_db(db):
                 'sha256 TEXT,'
                 'PRIMARY KEY (repo, filename)'
                 ')')
-    cur.execute('CREATE TABLE IF NOT EXISTS dpkg_repo_stats ('
-                'repo TEXT PRIMARY KEY,'
-                'packagecnt INTEGER,'
-                'ghostcnt INTEGER,'
-                'laggingcnt INTEGER,'
-                'missingcnt INTEGER,'
-                'oldcnt INTEGER,'
-                'FOREIGN KEY(repo) REFERENCES dpkg_repos(name)'
-                ')')
-    cur.execute("DROP VIEW IF EXISTS v_dpkg_packages_new")
-    cur.execute("CREATE VIEW IF NOT EXISTS v_dpkg_packages_new AS "
-                "SELECT dp.package package, "
-                "  max(version COLLATE vercomp) dpkg_version, "
-                "  dp.repo repo, dr.realname reponame, "
-                "  dr.architecture architecture, "
-                "  dr.suite branch "
-                "FROM dpkg_packages dp "
-                "LEFT JOIN dpkg_repos dr ON dr.name=dp.repo "
-                "GROUP BY package, repo")
+    if with_stats:
+        cur.execute('CREATE TABLE IF NOT EXISTS dpkg_repo_stats ('
+                    'repo TEXT PRIMARY KEY,'
+                    'packagecnt INTEGER,'
+                    'ghostcnt INTEGER,'
+                    'laggingcnt INTEGER,'
+                    'missingcnt INTEGER,'
+                    'oldcnt INTEGER,'
+                    'FOREIGN KEY(repo) REFERENCES dpkg_repos(name)'
+                    ')')
+        cur.execute("DROP VIEW IF EXISTS v_dpkg_packages_new")
+        cur.execute("CREATE VIEW IF NOT EXISTS v_dpkg_packages_new AS "
+                    "SELECT dp.package package, "
+                    "  max(version COLLATE vercomp) dpkg_version, "
+                    "  dp.repo repo, dr.realname reponame, "
+                    "  dr.architecture architecture, "
+                    "  dr.suite branch "
+                    "FROM dpkg_packages dp "
+                    "LEFT JOIN dpkg_repos dr ON dr.name=dp.repo "
+                    "GROUP BY package, repo")
     cur.execute('CREATE INDEX IF NOT EXISTS idx_dpkg_repos'
                 ' ON dpkg_repos (realname)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_dpkg_packages'
@@ -548,7 +549,7 @@ def main(argv):
         logging.error('mod_vercomp.so not found, run `make` first.')
         sys.exit(1)
     db.enable_load_extension(False)
-    init_db(db)
+    init_db(db, not args.no_stats)
     if args.sources_list:
         update_sources_list(
             db, args.sources_list, args.branch, args.arch, args.local, args.force)
