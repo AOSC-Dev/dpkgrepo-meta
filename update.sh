@@ -15,8 +15,6 @@ for repo in $REPOS; do
         popd
     fi
 done
-python3 $ABBS_META -p . -m . -d abbs.db -b master -B master \
-    -c base -u 'https://github.com/AOSC-Dev/aosc-os-core' -P 0 aosc-os-core
 python3 $ABBS_META -p . -m . -d abbs.db \
     -b stable,stable-proposed,testing,testing-proposed,explosive -B testing-proposed \
     -c base -u 'https://github.com/AOSC-Dev/aosc-os-abbs' -P 1 aosc-os-abbs
