@@ -68,15 +68,13 @@ Repo = collections.namedtuple('Repo', (
     'architecture', # deb source architecture
 ))
 
-ARCHS = ('amd64', 'arm64', 'armel', 'i586', 'powerpc', 'ppc64', 'riscv64', 'noarch')
+ARCHS = ('amd64', 'arm64', 'armel', 'noarch')
 BRANCHES = ('stable', 'stable-proposed', 'testing', 'testing-proposed', 'explosive')
 OVERLAYS = (
     # dpkg_repos.category, component, source, arch
     ('base', 'main', None, ARCHS),
-    ('bsp', 'bsp-sunxi', 'aosc-os-arm-bsps', ('armel', 'arm64', 'noarch')),
-    ('bsp', 'bsp-rk', 'aosc-os-arm-bsps', ('armel', 'arm64', 'noarch')),
-    ('overlay', 'opt-avx2', None, ('amd64',)),
-    ('overlay', 'opt-g4', None, ('powerpc',)),
+    ('bsp', 'bsp-sunxi', 'aosc-os-arm-bsps', ('arm64', 'noarch')),
+    ('bsp', 'bsp-rk', 'aosc-os-arm-bsps', ('arm64', 'noarch')),
 )
 REPOS = collections.OrderedDict((k, []) for k in BRANCHES)
 for category, component, source, archs in OVERLAYS:
