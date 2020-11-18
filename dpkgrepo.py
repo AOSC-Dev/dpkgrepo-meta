@@ -59,17 +59,17 @@ logging.basicConfig(
 
 Repo = collections.namedtuple('Repo', (
     'name',     # primary key
-    'realname', # overlay-arch, group key
+    'realname',  # overlay-arch, group key
     'source_tree',  # git source
-    'category', # base, bsp, overlay
+    'category',  # base, bsp, overlay
     'testing',  # 0-2, testing level
     'suite',        # deb source suite/distribution, git branch
     'component',    # deb source component
-    'architecture', # deb source architecture
+    'architecture',  # deb source architecture
 ))
 
-ARCHS = ('amd64', 'arm64', 'armel', 'noarch')
-BRANCHES = ('stable', 'stable-proposed', 'testing', 'testing-proposed', 'explosive')
+ARCHS = ('amd64', 'arm64', 'loongson3', 'ppc64el', 'noarch')
+BRANCHES = ('stable',)
 OVERLAYS = (
     # dpkg_repos.category, component, source, arch
     ('base', 'main', None, ARCHS),
@@ -95,13 +95,14 @@ def _url_slash(url):
         return url
     return url + '/'
 
+
 def init_db(db, with_stats=True):
     cur = db.cursor()
     cur.execute('CREATE TABLE IF NOT EXISTS dpkg_repos ('
-                'name TEXT PRIMARY KEY,' # key: bsp-sunxi-armel/testing
+                'name TEXT PRIMARY KEY,'  # key: bsp-sunxi-armel/testing
                 'realname TEXT,'    # group key: amd64, bsp-sunxi-armel
-                'source_tree TEXT,' # abbs tree
-                'category TEXT,' # base, bsp, overlay
+                'source_tree TEXT,'  # abbs tree
+                'category TEXT,'  # base, bsp, overlay
                 'testing INTEGER,'    # 0, 1, 2
                 'suite TEXT,'         # stable, testing, explosive
                 'component TEXT,'     # main, bsp-sunxi, opt-avx2
@@ -176,6 +177,7 @@ def init_db(db, with_stats=True):
     db.commit()
     cur.close()
 
+
 def remove_clearsign(blob):
     clearsign_header = b'-----BEGIN PGP SIGNED MESSAGE-----'
     pgpsign_header = b'-----BEGIN PGP SIGNATURE-----'
@@ -195,6 +197,7 @@ def remove_clearsign(blob):
                 lines.append(ln)
     return b''.join(lines)
 
+
 def download_catalog(url, local=False, timeout=120, ignore404=False):
     if local:
         urlsp = urllib.parse.urlsplit(url)
@@ -211,6 +214,7 @@ def download_catalog(url, local=False, timeout=120, ignore404=False):
     req.raise_for_status()
     return req.content
 
+
 def suite_update(db, mirror, suite, repos=None, local=False, force=False):
     """
     Fetch and parse InRelease file. Update relavant metadata.
@@ -226,12 +230,12 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
             return {}
         for repo in repos:
             cur.execute('UPDATE dpkg_repos SET origin=null, label=null, '
-                'codename=null, date=null, valid_until=null, description=null '
-                'WHERE name=?', (repo.name,))
+                        'codename=null, date=null, valid_until=null, description=null '
+                        'WHERE name=?', (repo.name,))
             cur.execute('DELETE FROM dpkg_package_dependencies WHERE repo=?',
-                (repo.name,))
+                        (repo.name,))
             cur.execute('DELETE FROM dpkg_package_duplicate WHERE repo=?',
-                (repo.name,))
+                        (repo.name,))
             cur.execute('DELETE FROM dpkg_packages WHERE repo=?', (repo.name,))
         db.commit()
         return {}
@@ -250,10 +254,12 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
             else:
                 realname = '%s-%s' % (component, arch)
             name = '%s/%s' % (realname, suite)
-            repo = Repo(name, realname, None, 'base', 0, suite, component, arch)
+            repo = Repo(name, realname, None, 'base',
+                        0, suite, component, arch)
             pkgrepos.append(
                 (repo, item['name'], int(item['size']), item['sha256']))
-    rel_date = calendar.timegm(parsedate(rel['Date'])) if 'Date' in rel else None
+    rel_date = calendar.timegm(
+        parsedate(rel['Date'])) if 'Date' in rel else None
     rel_valid = None
     if 'Valid-Until' in rel:
         rel_valid = calendar.timegm(parsedate(rel['Valid-Until']))
@@ -272,31 +278,35 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
             if res[0] and res[0] >= rel_date:
                 continue
         pkgpath = '/'.join(('dists', suite, filename))
-        result_repos[repo.component, repo.architecture] = (repo, pkgpath, size, sha256)
+        result_repos[repo.component, repo.architecture] = (
+            repo, pkgpath, size, sha256)
         cur.execute('REPLACE INTO dpkg_repos VALUES '
-            '(?,?,?,?,?, ?,?,?,?,?, ?,?,?,?)', (
-            repo.name, repo.realname,
-            repo.source_tree, repo.category, repo.testing, repo.suite,
-            repo.component, repo.architecture, rel.get('Origin'),
-            rel.get('Label'), rel.get('Codename'), rel_date, rel_valid,
-            rel.get('Description')
-        ))
+                    '(?,?,?,?,?, ?,?,?,?,?, ?,?,?,?)', (
+                        repo.name, repo.realname,
+                        repo.source_tree, repo.category, repo.testing, repo.suite,
+                        repo.component, repo.architecture, rel.get('Origin'),
+                        rel.get('Label'), rel.get(
+                            'Codename'), rel_date, rel_valid,
+                        rel.get('Description')
+                    ))
     for repo in repo_dict.values():
         cur.execute('UPDATE dpkg_repos SET origin=null, label=null, '
-            'codename=null, date=null, valid_until=null, description=null '
-            'WHERE name=?', (repo.name,))
+                    'codename=null, date=null, valid_until=null, description=null '
+                    'WHERE name=?', (repo.name,))
         cur.execute('DELETE FROM dpkg_package_dependencies WHERE repo=?',
-            (repo.name,))
+                    (repo.name,))
         cur.execute('DELETE FROM dpkg_package_duplicate WHERE repo=?',
-            (repo.name,))
+                    (repo.name,))
         cur.execute('DELETE FROM dpkg_packages WHERE repo=?', (repo.name,))
     cur.close()
     db.commit()
     return result_repos
 
+
 _relationship_fields = ('depends', 'pre-depends', 'recommends',
-        'suggests', 'breaks', 'conflicts', 'provides', 'replaces',
-        'enhances')
+                        'suggests', 'breaks', 'conflicts', 'provides', 'replaces',
+                        'enhances')
+
 
 def package_update(db, mirror, repo, path, size, sha256, local=False):
     logging.info(repo.name)
@@ -309,7 +319,8 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
     pkgs = lzma.decompress(content).decode('utf-8')
     packages = {}
     cur = db.cursor()
-    cur.execute('DELETE FROM dpkg_package_duplicate WHERE repo = ?', (repo.name,))
+    cur.execute(
+        'DELETE FROM dpkg_package_duplicate WHERE repo = ?', (repo.name,))
     packages_old = set(cur.execute(
         'SELECT package, version, architecture, repo FROM dpkg_packages'
         ' WHERE repo = ?', (repo.name,)
@@ -364,6 +375,7 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
                     ' AND version = ? AND architecture = ? AND repo = ?', pkg)
     cur.close()
     db.commit()
+
 
 SQL_COUNT_REPO = '''
 REPLACE INTO dpkg_repo_stats
@@ -480,9 +492,11 @@ LEFT JOIN (
 ORDER BY c1.category, c1.reponame, c1.testing
 '''
 
+
 def stats_update(db):
     db.execute(SQL_COUNT_REPO)
     db.commit()
+
 
 def update(db, mirror, branches=None, arch=None, local=False, force=False):
     branches = frozenset(branches if branches else ())
@@ -494,6 +508,7 @@ def update(db, mirror, branches=None, arch=None, local=False, force=False):
             if arch and repo.architecture != arch:
                 continue
             package_update(db, mirror, repo, path, size, sha256, local)
+
 
 def update_sources_list(db, filename, branches=None, arch=None, local=False, force=False):
     with open(filename, 'r', encoding='utf-8') as f:
@@ -517,23 +532,28 @@ def update_sources_list(db, filename, branches=None, arch=None, local=False, for
                     continue
                 package_update(db, mirror, repo, path, size, sha256, local)
 
+
 def main(argv):
-    parser = argparse.ArgumentParser(description="Get package info from DPKG sources.")
-    parser.add_argument("-l", "--local", help="Try local apt cache", action='store_true')
-    parser.add_argument("-f", "--force", help="Force update", action='store_true')
+    parser = argparse.ArgumentParser(
+        description="Get package info from DPKG sources.")
+    parser.add_argument(
+        "-l", "--local", help="Try local apt cache", action='store_true')
+    parser.add_argument(
+        "-f", "--force", help="Force update", action='store_true')
     parser.add_argument("-n", "--no-stats",
-        help="Don't calculate package stats", action='store_true')
+                        help="Don't calculate package stats", action='store_true')
     parser.add_argument("-b", "--branch",
-        help="Only get this branch, can be specified multiple times", action='append')
+                        help="Only get this branch, can be specified multiple times", action='append')
     parser.add_argument("-a", "--arch", help="Only get this architecture")
     parser.add_argument("-m", "--mirror",
-        help="Set mirror location, https is recommended. "
-             "This overrides environment variable REPO_MIRROR. ",
-        default=os.environ.get('REPO_MIRROR', 'https://repo.aosc.io/debs')
-    )
+                        help="Set mirror location, https is recommended. "
+                        "This overrides environment variable REPO_MIRROR. ",
+                        default=os.environ.get(
+                            'REPO_MIRROR', 'https://repo.aosc.io/debs')
+                        )
     parser.add_argument("-s", "--sources-list",
-        help="Use specified sources.list file as repo list."
-    )
+                        help="Use specified sources.list file as repo list."
+                        )
     parser.add_argument("dbfile", help="abbs database file")
     args = parser.parse_args(argv)
 
@@ -560,6 +580,7 @@ def main(argv):
     if not args.no_stats:
         stats_update(db)
     db.commit()
+
 
 if __name__ == '__main__':
     import sys
