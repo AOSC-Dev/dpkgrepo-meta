@@ -1,5 +1,5 @@
 #!/bin/bash -ex
-REPOS="aosc-os-core aosc-os-abbs aosc-os-arm-bsps"
+REPOS="aosc-os-core aosc-os-abbs"
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 ABBS_META="$DIR/../abbs-meta/abbsmeta.py"
 DATA_DIR="data/"
@@ -18,8 +18,6 @@ done
 python3 "$ABBS_META" -p . -m . -d abbs.db \
     -b stable -B stable \
     -c base -u 'https://github.com/AOSC-Dev/aosc-os-abbs' -P 1 aosc-os-abbs
-python3 "$ABBS_META" -p . -m . -d abbs.db -b stable -B stable \
-    -c bsp -u 'https://github.com/AOSC-Dev/aosc-os-arm-bsps' -P 2 aosc-os-arm-bsps
 pushd "$DIR"
 make all
 popd
