@@ -73,8 +73,6 @@ BRANCHES = ('stable',)
 OVERLAYS = (
     # dpkg_repos.category, component, source, arch
     ('base', 'main', None, ARCHS),
-    ('bsp', 'bsp-sunxi', 'aosc-os-arm-bsps', ('arm64', 'noarch')),
-    ('bsp', 'bsp-rk', 'aosc-os-arm-bsps', ('arm64', 'noarch')),
 )
 REPOS = collections.OrderedDict((k, []) for k in BRANCHES)
 for category, component, source, archs in OVERLAYS:
