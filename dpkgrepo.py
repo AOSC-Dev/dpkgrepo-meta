@@ -247,6 +247,8 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
             if arch == 'all':
                 arch = 'noarch'
             component = path[0]
+            if component.startswith('bsp-'):
+                continue
             if component == 'main':
                 realname = arch
             else:
