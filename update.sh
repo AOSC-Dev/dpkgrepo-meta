@@ -19,7 +19,6 @@ python3 "$ABBS_META" -p . -m . -d abbs.db \
     -b stable -B stable \
     -c base -u 'https://github.com/AOSC-Dev/aosc-os-abbs' -P 1 aosc-os-abbs
 pushd "$DIR"
-make all
 popd
 python3 "$DIR/dpkgrepo.py" abbs.db
 rm -rf cache.new
@@ -30,7 +29,7 @@ pushd cache.new
 for db in $dbs; do
     sqlite3 "../$db" ".backup $db"
     stat --printf="%s " "$db" >> dbhashs
-    "$DIR/dbhash" "$db" >> dbhashs
+    "dbhash" "$db" >> dbhashs
     gzip -9 --rsyncable "$db"
 done
 popd
