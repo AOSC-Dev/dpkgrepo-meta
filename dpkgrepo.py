@@ -20,7 +20,7 @@
 
 import os
 import lzma
-import sqlite3
+import psycopg2
 import hashlib
 import logging
 import calendar
@@ -96,6 +96,7 @@ def _url_slash(url):
 
 def init_db(db, with_stats=True):
     cur = db.cursor()
+    cur.execute(open("dpkg_vercmp.sql", "r").read())
     cur.execute('CREATE TABLE IF NOT EXISTS dpkg_repos ('
                 'name TEXT PRIMARY KEY,'  # key: bsp-sunxi-armel/testing
                 'realname TEXT,'    # group key: amd64, bsp-sunxi-armel
@@ -159,15 +160,15 @@ def init_db(db, with_stats=True):
                     'FOREIGN KEY(repo) REFERENCES dpkg_repos(name)'
                     ')')
         cur.execute("DROP VIEW IF EXISTS v_dpkg_packages_new")
-        cur.execute("CREATE VIEW IF NOT EXISTS v_dpkg_packages_new AS "
+        cur.execute("CREATE OR REPLACE VIEW v_dpkg_packages_new AS "
                     "SELECT dp.package package, "
-                    "  max(version COLLATE vercomp) dpkg_version, "
+                    "  max(version) dpkg_version, "
                     "  dp.repo repo, dr.realname reponame, "
                     "  dr.architecture architecture, "
                     "  dr.suite branch "
                     "FROM dpkg_packages dp "
                     "LEFT JOIN dpkg_repos dr ON dr.name=dp.repo "
-                    "GROUP BY package, repo")
+                    "GROUP BY package, repo, reponame, dr.architecture, branch")
     cur.execute('CREATE INDEX IF NOT EXISTS idx_dpkg_repos'
                 ' ON dpkg_repos (realname)')
     cur.execute('CREATE INDEX IF NOT EXISTS idx_dpkg_packages'
@@ -272,16 +273,30 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
             repo = repo_dict.pop((pkgrepo.component, pkgrepo.architecture))
         except KeyError:
             repo = pkgrepo
-        res = cur.execute('SELECT date FROM dpkg_repos WHERE name=?',
-                          (repo.name,)).fetchone()
+        res = cur.execute("SELECT date FROM dpkg_repos where name = %s", (repo.name,))
         if res and rel_date and not force:
             if res[0] and res[0] >= rel_date:
                 continue
         pkgpath = '/'.join(('dists', suite, filename))
         result_repos[repo.component, repo.architecture] = (
             repo, pkgpath, size, sha256)
-        cur.execute('REPLACE INTO dpkg_repos VALUES '
-                    '(?,?,?,?,?, ?,?,?,?,?, ?,?,?,?)', (
+        cur.execute("""INSERT INTO dpkg_repos VALUES
+                    (%s,%s,%s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s)
+                    ON CONFLICT (name) DO UPDATE
+                        SET realname = excluded.realname, 
+                            source_tree = excluded.source_tree,
+                            category = excluded.category,
+                            testing = excluded.testing,
+                            suite = excluded.suite,
+                            component = excluded.component,
+                            architecture = excluded.architecture,
+                            origin = excluded.origin,
+                            label = excluded.label,
+                            codename = excluded.codename,
+                            date = excluded.date,
+                            valid_until = excluded.valid_until,
+                            description = excluded.description;
+                    """, (
                         repo.name, repo.realname,
                         repo.source_tree, repo.category, repo.testing, repo.suite,
                         repo.component, repo.architecture, rel.get('Origin'),
@@ -292,12 +307,12 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
     for repo in repo_dict.values():
         cur.execute('UPDATE dpkg_repos SET origin=null, label=null, '
                     'codename=null, date=null, valid_until=null, description=null '
-                    'WHERE name=?', (repo.name,))
-        cur.execute('DELETE FROM dpkg_package_dependencies WHERE repo=?',
+                    'WHERE name=%s', (repo.name,))
+        cur.execute('DELETE FROM dpkg_package_dependencies WHERE repo=%s',
                     (repo.name,))
-        cur.execute('DELETE FROM dpkg_package_duplicate WHERE repo=?',
+        cur.execute('DELETE FROM dpkg_package_duplicate WHERE repo=%s',
                     (repo.name,))
-        cur.execute('DELETE FROM dpkg_packages WHERE repo=?', (repo.name,))
+        cur.execute('DELETE FROM dpkg_packages WHERE repo=%s', (repo.name,))
     cur.close()
     db.commit()
     return result_repos
@@ -320,10 +335,10 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
     packages = {}
     cur = db.cursor()
     cur.execute(
-        'DELETE FROM dpkg_package_duplicate WHERE repo = ?', (repo.name,))
+        'DELETE FROM dpkg_package_duplicate WHERE repo = %s', (repo.name,))
     packages_old = set(cur.execute(
         'SELECT package, version, architecture, repo FROM dpkg_packages'
-        ' WHERE repo = ?', (repo.name,)
+        ' WHERE repo = %s', (repo.name,)
     ))
     for pkg in deb822.Packages.iter_paragraphs(pkgs):
         name = pkg['Package']
@@ -338,41 +353,68 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
         if pkgtuple in packages:
             logging.warning('duplicate package: %r', pkgtuple)
             cur.execute(
-                'REPLACE INTO dpkg_package_duplicate VALUES (?,?,?,?,?,?,?,?,?)',
+                """INSERT INTO dpkg_package_duplicate VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (repo, filename) DO UPDATE
+                        SET package = excluded.package,
+                            version = excluded.version,
+                            architecture = excluded.architecture,
+                            maintainer = excluded.maintainer,
+                            install_size = excluded.installed_size,
+                            size = excluded.size,
+                            sha256 = excluded.sha256;
+                """,
                 packages[pkgtuple])
             cur.execute(
-                'REPLACE INTO dpkg_package_duplicate VALUES (?,?,?,?,?,?,?,?,?)',
+                """NSERT INTO dpkg_package_duplicate VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (repo, filename) DO UPDATE
+                        SET package = excluded.package,
+                            version = excluded.version,
+                            architecture = excluded.architecture,
+                            maintainer = excluded.maintainer,
+                            install_size = excluded.installed_size,
+                            size = excluded.size,
+                            sha256 = excluded.sha256;
+                """,
                 pkginfo)
             if pkg['Filename'] < packages[pkgtuple][6]:
                 continue
         packages[pkgtuple] = pkginfo
-        cur.execute('REPLACE INTO dpkg_packages VALUES (?,?,?,?,?,?,?,?,?)',
+        cur.execute("""INSERT INTO dpkg_packages VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (package, version, architecture, repo) DO UPDATE
+                    SET maintainer = excluded.maintainer
+                        installed_size = excluded.installed_size
+                        filename = excluded.filename
+                        size = excluded.size
+                        sha256 = excluded.sha256
+                    """,
                     pkginfo)
         oldrels = frozenset(row[0] for row in cur.execute(
             'SELECT relationship FROM dpkg_package_dependencies'
-            ' WHERE package = ? AND version = ? AND architecture = ? AND repo = ?',
+            ' WHERE package = %s AND version = %s AND architecture = %s AND repo = %s',
             (name, ver, arch, repo.name)
         ))
         newrels = set()
         for rel in _relationship_fields:
             if rel in pkg:
                 cur.execute(
-                    'REPLACE INTO dpkg_package_dependencies VALUES (?,?,?,?,?,?)',
+                    """INSERT INTO dpkg_package_dependencies VALUES (%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (package, version, architecture, repo, relationship) DO UPDATE
+                        SET value = excluded.value""",
                     (name, ver, arch, repo.name, rel, pkg[rel])
                 )
                 newrels.add(rel)
         for rel in oldrels.difference(newrels):
             cur.execute(
                 'DELETE FROM dpkg_package_dependencies'
-                ' WHERE package = ? AND version = ? AND architecture = ?'
-                ' AND repo = ? AND relationship = ?',
+                ' WHERE package = %s AND version = %s AND architecture = %s'
+                ' AND repo = %s AND relationship = %s',
                 (name, ver, arch, repo.name, rel)
             )
     for pkg in packages_old.difference(packages.keys()):
-        cur.execute('DELETE FROM dpkg_packages WHERE package = ? AND version = ?'
-                    ' AND architecture = ? AND repo = ?', pkg)
-        cur.execute('DELETE FROM dpkg_package_dependencies WHERE package = ?'
-                    ' AND version = ? AND architecture = ? AND repo = ?', pkg)
+        cur.execute('DELETE FROM dpkg_packages WHERE package = %s AND version = %s'
+                    ' AND architecture = %s AND repo = %s', pkg)
+        cur.execute('DELETE FROM dpkg_package_dependencies WHERE package = %s'
+                    ' AND version = %s AND architecture = %s AND repo = %s', pkg)
     cur.close()
     db.commit()
 
@@ -557,16 +599,8 @@ def main(argv):
     parser.add_argument("dbfile", help="abbs database file")
     args = parser.parse_args(argv)
 
-    db = sqlite3.connect(args.dbfile)
-    try:
-        db.enable_load_extension(True)
-        extpath = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), 'mod_vercomp.so'))
-        db.load_extension(extpath)
-    except sqlite3.OperationalError:
-        logging.error('mod_vercomp.so not found, run `make` first.')
-        sys.exit(1)
-    db.enable_load_extension(False)
+    db = psycopg2.connect(database="abbs",user="postgres",password="secret")
+
     init_db(db, not args.no_stats)
     if args.sources_list:
         update_sources_list(
