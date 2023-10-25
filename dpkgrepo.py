@@ -109,8 +109,8 @@ def init_db(db, with_stats=True):
                 'origin TEXT,'
                 'label TEXT,'
                 'codename TEXT,'
-                'date INTEGER,'
-                'valid_until INTEGER,'
+                'date BIGINT,'
+                'valid_until BIGINT,'
                 'description TEXT'
                 ')')
     cur.execute('CREATE TABLE IF NOT EXISTS dpkg_packages ('
@@ -119,9 +119,9 @@ def init_db(db, with_stats=True):
                 'architecture TEXT,'
                 'repo TEXT,'
                 'maintainer TEXT,'
-                'installed_size INTEGER,'
+                'installed_size BIGINT,'
                 'filename TEXT,'
-                'size INTEGER,'
+                'size BIGINT,'
                 'sha256 TEXT,'
                 # we have Section and Description in packages table
                 'PRIMARY KEY (package, version, architecture, repo)'
@@ -143,20 +143,20 @@ def init_db(db, with_stats=True):
                 'architecture TEXT,'
                 'repo TEXT,'
                 'maintainer TEXT,'
-                'installed_size INTEGER,'
+                'installed_size BIGINT,'
                 'filename TEXT,'
-                'size INTEGER,'
+                'size BIGINT,'
                 'sha256 TEXT,'
                 'PRIMARY KEY (repo, filename)'
                 ')')
     if with_stats:
         cur.execute('CREATE TABLE IF NOT EXISTS dpkg_repo_stats ('
                     'repo TEXT PRIMARY KEY,'
-                    'packagecnt INTEGER,'
-                    'ghostcnt INTEGER,'
-                    'laggingcnt INTEGER,'
-                    'missingcnt INTEGER,'
-                    'oldcnt INTEGER,'
+                    'packagecnt BIGINT,'
+                    'ghostcnt BIGINT,'
+                    'laggingcnt BIGINT,'
+                    'missingcnt BIGINT,'
+                    'oldcnt BIGINT,'
                     'FOREIGN KEY(repo) REFERENCES dpkg_repos(name)'
                     ')')
         cur.execute("DROP VIEW IF EXISTS v_dpkg_packages_new")
@@ -336,10 +336,13 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
     cur = db.cursor()
     cur.execute(
         'DELETE FROM dpkg_package_duplicate WHERE repo = %s', (repo.name,))
-    packages_old = set(cur.execute(
+    packages_old = cur.execute(
         'SELECT package, version, architecture, repo FROM dpkg_packages'
-        ' WHERE repo = %s', (repo.name,)
-    ))
+        ' WHERE repo = %s', (repo.name,))
+    
+    if packages_old is not None:
+        packages_old = set(packages_old)
+
     for pkg in deb822.Packages.iter_paragraphs(pkgs):
         name = pkg['Package']
         arch = pkg['Architecture']
@@ -359,19 +362,20 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
                             version = excluded.version,
                             architecture = excluded.architecture,
                             maintainer = excluded.maintainer,
-                            install_size = excluded.installed_size,
+                            installed_size = excluded.installed_size,
                             size = excluded.size,
                             sha256 = excluded.sha256;
                 """,
                 packages[pkgtuple])
+            
             cur.execute(
-                """NSERT INTO dpkg_package_duplicate VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """INSERT INTO dpkg_package_duplicate VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (repo, filename) DO UPDATE
                         SET package = excluded.package,
                             version = excluded.version,
                             architecture = excluded.architecture,
                             maintainer = excluded.maintainer,
-                            install_size = excluded.installed_size,
+                            installed_size = excluded.installed_size,
                             size = excluded.size,
                             sha256 = excluded.sha256;
                 """,
@@ -379,20 +383,26 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
             if pkg['Filename'] < packages[pkgtuple][6]:
                 continue
         packages[pkgtuple] = pkginfo
+        # print(pkginfo)
         cur.execute("""INSERT INTO dpkg_packages VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (package, version, architecture, repo) DO UPDATE
-                    SET maintainer = excluded.maintainer
-                        installed_size = excluded.installed_size
-                        filename = excluded.filename
-                        size = excluded.size
-                        sha256 = excluded.sha256
+                    SET maintainer = excluded.maintainer,
+                        installed_size = excluded.installed_size,
+                        filename = excluded.filename,
+                        size = excluded.size,
+                        sha256 = excluded.sha256;
                     """,
                     pkginfo)
-        oldrels = frozenset(row[0] for row in cur.execute(
+
+        oldrels = cur.execute(
             'SELECT relationship FROM dpkg_package_dependencies'
             ' WHERE package = %s AND version = %s AND architecture = %s AND repo = %s',
             (name, ver, arch, repo.name)
-        ))
+        )
+
+        if oldrels is not None:
+            oldrels = frozenset(row[0] for row in oldrels)
+
         newrels = set()
         for rel in _relationship_fields:
             if rel in pkg:
@@ -403,18 +413,23 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
                     (name, ver, arch, repo.name, rel, pkg[rel])
                 )
                 newrels.add(rel)
-        for rel in oldrels.difference(newrels):
-            cur.execute(
-                'DELETE FROM dpkg_package_dependencies'
-                ' WHERE package = %s AND version = %s AND architecture = %s'
-                ' AND repo = %s AND relationship = %s',
-                (name, ver, arch, repo.name, rel)
-            )
-    for pkg in packages_old.difference(packages.keys()):
-        cur.execute('DELETE FROM dpkg_packages WHERE package = %s AND version = %s'
-                    ' AND architecture = %s AND repo = %s', pkg)
-        cur.execute('DELETE FROM dpkg_package_dependencies WHERE package = %s'
-                    ' AND version = %s AND architecture = %s AND repo = %s', pkg)
+        
+        if oldrels is not None:
+            for rel in oldrels.difference(newrels):
+                cur.execute(
+                    'DELETE FROM dpkg_package_dependencies'
+                    ' WHERE package = %s AND version = %s AND architecture = %s'
+                    ' AND repo = %s AND relationship = %s',
+                    (name, ver, arch, repo.name, rel)
+                )
+    
+    if packages_old is not None:
+        for pkg in packages_old.difference(packages.keys()):
+            cur.execute('DELETE FROM dpkg_packages WHERE package = %s AND version = %s'
+                        ' AND architecture = %s AND repo = %s', pkg)
+            cur.execute('DELETE FROM dpkg_package_dependencies WHERE package = %s'
+                        ' AND version = %s AND architecture = %s AND repo = %s', pkg)
+
     cur.close()
     db.commit()
 
@@ -536,7 +551,8 @@ ORDER BY c1.category, c1.reponame, c1.testing
 
 
 def stats_update(db):
-    db.execute(SQL_COUNT_REPO)
+    cur = db.cursor()
+    cur.execute(SQL_COUNT_REPO)
     db.commit()
 
 
@@ -610,7 +626,6 @@ def main(argv):
             db, _url_slash(args.mirror),
             args.branch, args.arch, args.local, args.force
         )
-    db.execute('PRAGMA optimize')
     if not args.no_stats:
         stats_update(db)
     db.commit()
