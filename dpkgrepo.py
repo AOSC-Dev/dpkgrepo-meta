@@ -133,9 +133,9 @@ def init_db(db, with_stats=True):
         "architecture TEXT,"
         "repo TEXT,"
         "maintainer TEXT,"
-        "installed_size INTEGER,"
+        "installed_size BIGINT,"
         "filename TEXT,"
-        "size INTEGER,"
+        "size BIGINT,"
         "sha256 TEXT,"
         # we have Section and Description in packages table
         "PRIMARY KEY (package, version, architecture, repo)"
@@ -161,12 +161,101 @@ def init_db(db, with_stats=True):
         "architecture TEXT,"
         "repo TEXT,"
         "maintainer TEXT,"
-        "installed_size INTEGER,"
+        "installed_size BIGINT,"
         "filename TEXT,"
-        "size INTEGER,"
+        "size BIGINT,"
         "sha256 TEXT,"
         "PRIMARY KEY (repo, filename)"
         ")"
+    )
+    cur.execute(
+        """
+        -- prepend length to input e.g. 10 -> 110, 100 -> 2100
+        CREATE OR REPLACE FUNCTION public._comparable_digit (digit text)
+        RETURNS text AS $$
+        -- prepnd length
+        SELECT chr(47 + length(v)) || v
+        -- trim leading zeros, handle zero string
+        FROM (SELECT CASE WHEN v='' THEN '0' ELSE v END v
+            FROM (SELECT trim(leading '0' from digit) v) q1
+        ) q2
+        $$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE;
+
+        -- convert version into comparable string
+        -- e.g. 1.2.0-1 becomes five rows:
+        -- "{,1,.2.0-1}"
+        -- "{.,2,.0-1}"
+        -- "{.,0,-1}"
+        -- "{-,1,}"
+        -- "{,,}"
+        -- after translation:
+        -- 101
+        -- h102
+        -- h100
+        -- g101
+        -- 1
+        -- result is concatenated: 101h102h100g1011
+        -- note: sql array indices are 1-based
+        CREATE OR REPLACE FUNCTION public.comparable_ver (ver text)
+        RETURNS text AS $$
+        -- split valid version parts
+        WITH RECURSIVE q1 AS (
+            SELECT regexp_match($1, '^([^0-9]*)([0-9]*)(.*)$') v
+            UNION ALL
+            SELECT regexp_match(v[3], '^([^0-9]*)([0-9]*)(.*)$') FROM q1
+            WHERE v[3]!='' OR v[2]!=''
+        )
+        -- for each path, prepend its length and map
+        SELECT string_agg(translate(v[1] || '|',
+            '~|ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+-.',
+            '0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefgh') ||
+            (CASE WHEN v[2]='' THEN '' ELSE _comparable_digit(v[2]) END), '')
+        FROM q1
+        $$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE COST 200;
+
+        -- convert dpkg version (consider epochs) to comparable format
+        CREATE OR REPLACE FUNCTION public.comparable_dpkgver (ver text)
+        RETURNS text AS $$
+        SELECT ecmp || '!' || (CASE WHEN array_length(spl, 1)=1
+            THEN comparable_ver(spl[1]) || '!1'
+            ELSE comparable_ver(array_to_string(spl[1:array_length(spl, 1)-1], '-'))
+            || '!' || comparable_ver(spl[array_length(spl, 1)]) END)
+        FROM (
+            -- ecmp: epoch converted to comparable digit format
+            -- spl: version without epoch
+            SELECT (CASE WHEN epos=0 THEN '00'
+            ELSE _comparable_digit(substr(v, 1, epos-1)) END) ecmp, string_to_array(
+            CASE WHEN epos=0 THEN v ELSE substr(v, epos+1) END, '-') spl
+            FROM (SELECT position(':' in ver) epos, ver v) q1
+        ) q1
+        $$ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE COST 200;
+
+        -- compare dpkg version using custom comparator
+        CREATE OR REPLACE FUNCTION public.compare_dpkgver (a text, op text, b text)
+        RETURNS bool AS $$
+        SELECT CASE WHEN op IS NULL THEN TRUE
+            WHEN op='<<' THEN a < b
+            WHEN op='<=' THEN a <= b
+            WHEN op='=' THEN a = b
+            WHEN op='>=' THEN a >= b
+            WHEN op='>>' THEN a > b ELSE NULL END
+        $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE COST 200;
+
+        -- return bigger dpkg version
+        CREATE OR REPLACE FUNCTION public._max_dpkgver (a text, b text)
+        RETURNS text AS $$
+        SELECT CASE WHEN comparable_dpkgver(a) > comparable_dpkgver(b) THEN a
+            ELSE b END
+        $$ LANGUAGE SQL IMMUTABLE PARALLEL SAFE COST 200;
+
+        -- create custom aggregation for max version
+        CREATE OR REPLACE AGGREGATE max_dpkgver (text)
+        (
+            sfunc = _max_dpkgver,
+            stype = text,
+            initcond = ''
+        );
+                """
     )
     if with_stats:
         cur.execute(
@@ -182,15 +271,15 @@ def init_db(db, with_stats=True):
         )
         cur.execute("DROP VIEW IF EXISTS v_dpkg_packages_new")
         cur.execute(
-            "CREATE VIEW IF NOT EXISTS v_dpkg_packages_new AS "
+            "CREATE OR REPLACE VIEW v_dpkg_packages_new AS "
             "SELECT dp.package package, "
-            "  max(version COLLATE vercomp) dpkg_version, "
+            "  max_dpkgver(version) dpkg_version, "
             "  dp.repo repo, dr.realname reponame, "
             "  dr.architecture architecture, "
             "  dr.suite branch "
             "FROM dpkg_packages dp "
             "LEFT JOIN dpkg_repos dr ON dr.name=dp.repo "
-            "GROUP BY package, repo"
+            "GROUP BY package, repo, reponame, dr.architecture, branch"
         )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_dpkg_repos" " ON dpkg_repos (realname)")
     cur.execute(
@@ -255,14 +344,16 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
             cur.execute(
                 "UPDATE dpkg_repos SET origin=null, label=null, "
                 "codename=null, date=null, valid_until=null, description=null "
-                "WHERE name=?",
+                "WHERE name = %s",
                 (repo.name,),
             )
             cur.execute(
-                "DELETE FROM dpkg_package_dependencies WHERE repo=?", (repo.name,)
+                "DELETE FROM dpkg_package_dependencies WHERE repo = %s", (repo.name,)
             )
-            cur.execute("DELETE FROM dpkg_package_duplicate WHERE repo=?", (repo.name,))
-            cur.execute("DELETE FROM dpkg_packages WHERE repo=?", (repo.name,))
+            cur.execute(
+                "DELETE FROM dpkg_package_duplicate WHERE repo = %s", (repo.name,)
+            )
+            cur.execute("DELETE FROM dpkg_packages WHERE repo = %s", (repo.name,))
         db.commit()
         return {}
     releasetxt = remove_clearsign(content).decode("utf-8")
@@ -297,16 +388,31 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
             repo = repo_dict.pop((pkgrepo.component, pkgrepo.architecture))
         except KeyError:
             repo = pkgrepo
-        res = cur.execute(
-            "SELECT date FROM dpkg_repos WHERE name=?", (repo.name,)
-        ).fetchone()
+        cur.execute("SELECT date FROM dpkg_repos WHERE name = %s", (repo.name,))
+        res = cur.fetchone()
         if res and rel_date and not force:
             if res[0] and res[0] >= rel_date:
                 continue
         pkgpath = "/".join(("dists", suite, filename))
         result_repos[repo.component, repo.architecture] = (repo, pkgpath, size, sha256)
         cur.execute(
-            "REPLACE INTO dpkg_repos VALUES " "(?,?,?,?,?, ?,?,?,?,?, ?,?,?,?)",
+            "INSERT INTO dpkg_repos VALUES "
+            "(%s,%s,%s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s) "
+            "ON CONFLICT (name) "
+            "DO UPDATE SET "
+            "realname = excluded.realname, "
+            "source_tree = excluded.source_tree, "
+            "category = excluded.category, "
+            "testing = excluded.testing, "
+            "suite = excluded.suite, "
+            "component = excluded.component, "
+            "architecture = excluded.architecture, "
+            "origin = excluded.origin, "
+            "label = excluded.label, "
+            "codename = excluded.codename, "
+            "date = excluded.date, "
+            "valid_until = excluded.valid_until, "
+            "description = excluded.description ",
             (
                 repo.name,
                 repo.realname,
@@ -328,12 +434,14 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
         cur.execute(
             "UPDATE dpkg_repos SET origin=null, label=null, "
             "codename=null, date=null, valid_until=null, description=null "
-            "WHERE name=?",
+            "WHERE name = %s",
             (repo.name,),
         )
-        cur.execute("DELETE FROM dpkg_package_dependencies WHERE repo=?", (repo.name,))
-        cur.execute("DELETE FROM dpkg_package_duplicate WHERE repo=?", (repo.name,))
-        cur.execute("DELETE FROM dpkg_packages WHERE repo=?", (repo.name,))
+        cur.execute(
+            "DELETE FROM dpkg_package_dependencies WHERE repo = %s", (repo.name,)
+        )
+        cur.execute("DELETE FROM dpkg_package_duplicate WHERE repo = %s", (repo.name,))
+        cur.execute("DELETE FROM dpkg_packages WHERE repo = %s", (repo.name,))
     cur.close()
     db.commit()
     return result_repos
@@ -363,14 +471,13 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
     pkgs = lzma.decompress(content).decode("utf-8")
     packages = {}
     cur = db.cursor()
-    cur.execute("DELETE FROM dpkg_package_duplicate WHERE repo = ?", (repo.name,))
-    packages_old = set(
-        cur.execute(
-            "SELECT package, version, architecture, repo FROM dpkg_packages"
-            " WHERE repo = ?",
-            (repo.name,),
-        )
+    cur.execute("DELETE FROM dpkg_package_duplicate WHERE repo = %s", (repo.name,))
+    cur.execute(
+        "SELECT package, version, architecture, repo FROM dpkg_packages"
+        " WHERE repo = %s",
+        (repo.name,),
     )
+    packages_old = set(cur.fetchall())
     for pkg in deb822.Packages.iter_paragraphs(pkgs):
         name = pkg["Package"]
         arch = pkg["Architecture"]
@@ -390,49 +497,78 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
         if pkgtuple in packages:
             logging.warning("duplicate package: %r", pkgtuple)
             cur.execute(
-                "REPLACE INTO dpkg_package_duplicate VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO dpkg_package_duplicate VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (repo, filename) "
+                "DO UPDATE SET "
+                "package = excluded.package, "
+                "version = excluded.version, "
+                "architecture = excluded.architecture, "
+                "maintainer = excluded.maintainer, "
+                "installed_size = excluded.installed_size, "
+                "size = excluded.size, "
+                "sha256 = excluded.sha256, ",
                 packages[pkgtuple],
             )
             cur.execute(
-                "REPLACE INTO dpkg_package_duplicate VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO dpkg_package_duplicate VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (repo, filename) "
+                "DO UPDATE SET "
+                "package = excluded.package, "
+                "version = excluded.version, "
+                "architecture = excluded.architecture, "
+                "maintainer = excluded.maintainer, "
+                "installed_size = excluded.installed_size, "
+                "size = excluded.size, "
+                "sha256 = excluded.sha256, ",
                 pkginfo,
             )
             if pkg["Filename"] < packages[pkgtuple][6]:
                 continue
         packages[pkgtuple] = pkginfo
-        cur.execute("REPLACE INTO dpkg_packages VALUES (?,?,?,?,?,?,?,?,?)", pkginfo)
-        oldrels = frozenset(
-            row[0]
-            for row in cur.execute(
-                "SELECT relationship FROM dpkg_package_dependencies"
-                " WHERE package = ? AND version = ? AND architecture = ? AND repo = ?",
-                (name, ver, arch, repo.name),
-            )
+        cur.execute(
+            "INSERT INTO dpkg_packages VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT (package, version, architecture, repo) "
+            "DO UPDATE SET "
+            "maintainer = excluded.maintainer, "
+            "installed_size = excluded.installed_size, "
+            "filename = excluded.filename, "
+            "size = excluded.size, "
+            "sha256 = excluded.sha256",
+            pkginfo,
         )
+
+        cur.execute(
+            "SELECT relationship FROM dpkg_package_dependencies"
+            " WHERE package = %s AND version = %s AND architecture = %s AND repo = %s",
+            (name, ver, arch, repo.name),
+        )
+        oldrels = frozenset(row[0] for row in cur.fetchall())
         newrels = set()
         for rel in _relationship_fields:
             if rel in pkg:
                 cur.execute(
-                    "REPLACE INTO dpkg_package_dependencies VALUES (?,?,?,?,?,?)",
+                    "INSERT INTO dpkg_package_dependencies VALUES (%s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (package, version, architecture, repo, relationship) "
+                    "DO UPDATE SET value = excluded.value",
                     (name, ver, arch, repo.name, rel, pkg[rel]),
                 )
                 newrels.add(rel)
         for rel in oldrels.difference(newrels):
             cur.execute(
                 "DELETE FROM dpkg_package_dependencies"
-                " WHERE package = ? AND version = ? AND architecture = ?"
-                " AND repo = ? AND relationship = ?",
+                " WHERE package = %s AND version = %s AND architecture = %s"
+                " AND repo = %s AND relationship = %s",
                 (name, ver, arch, repo.name, rel),
             )
     for pkg in packages_old.difference(packages.keys()):
         cur.execute(
-            "DELETE FROM dpkg_packages WHERE package = ? AND version = ?"
-            " AND architecture = ? AND repo = ?",
+            "DELETE FROM dpkg_packages WHERE package = %s AND version = %s"
+            " AND architecture = %s AND repo = %s",
             pkg,
         )
         cur.execute(
-            "DELETE FROM dpkg_package_dependencies WHERE package = ?"
-            " AND version = ? AND architecture = ? AND repo = ?",
+            "DELETE FROM dpkg_package_dependencies WHERE package = %s"
+            " AND version = %s AND architecture = %s AND repo = %s",
             pkg,
         )
     cur.close()
@@ -440,14 +576,14 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
 
 
 SQL_COUNT_REPO = """
-REPLACE INTO dpkg_repo_stats
+INSERT INTO dpkg_repo_stats
 SELECT c1.repo repo, pkgcount, ghost, lagging, missing, coalesce(olddebcnt, 0)
 FROM (
 SELECT
   dpkg_repos.name repo, dpkg_repos.realname reponame,
   dpkg_repos.testing testing, dpkg_repos.category category,
   count(packages.name) pkgcount,
-  (CASE WHEN count(packages.name)
+  (CASE WHEN count(packages.name) > 0
    THEN sum(CASE WHEN packages.name IS NULL THEN 1 ELSE 0 END)
    ELSE 0 END) ghost
 FROM dpkg_repos
@@ -462,19 +598,19 @@ LEFT JOIN packages
 LEFT JOIN package_spec spabhost
   ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
 WHERE packages.name IS NULL
-OR ((spabhost.value IS 'noarch') = (dpkg.architecture IS 'noarch'))
+OR ((spabhost.value = 'noarch') = (dpkg.architecture = 'noarch'))
 GROUP BY dpkg_repos.name
 ) c1
 LEFT JOIN (
 SELECT
   dpkg.repo repo, dpkg.reponame reponame,
-  sum(pkgver.fullver > dpkg.version COLLATE vercomp) lagging
+  sum((comparable_dpkgver(pkgver.fullver) > comparable_dpkgver(dpkg.version))::int) lagging
 FROM packages
 INNER JOIN (
     SELECT
       package, branch,
-      ((CASE WHEN ifnull(epoch, '') = '' THEN '' ELSE epoch || ':' END) ||
-       version || (CASE WHEN ifnull(release, '') IN ('', '0') THEN '' ELSE '-'
+      ((CASE WHEN coalesce(epoch, '') = '' THEN '' ELSE epoch || ':' END) ||
+       version || (CASE WHEN coalesce(release, '') IN ('', '0') THEN '' ELSE '-'
        || release END)) fullver
     FROM package_versions
   ) pkgver
@@ -485,18 +621,18 @@ LEFT JOIN package_spec spabhost
 LEFT JOIN (
     SELECT
       dp_d.name package, dr.name repo, dr.realname reponame,
-      max(dp.version COLLATE vercomp) version, dr.category category,
+      max_dpkgver(dp.version) AS version, dr.category category,
       dr.architecture architecture, dr.suite branch
     FROM packages dp_d
-    INNER JOIN dpkg_repos dr
-    LEFT JOIN dpkg_packages dp ON dp.package=dp_d.name AND dp.repo=dr.name
+    LEFT JOIN dpkg_packages dp ON dp.package = dp_d.name
+    INNER JOIN dpkg_repos dr ON dp.repo = dr.name
     GROUP BY dp_d.name, dr.name
   ) dpkg ON dpkg.package = packages.name
 WHERE pkgver.branch = dpkg.branch
-  AND ((spabhost.value IS 'noarch') = (dpkg.architecture IS 'noarch'))
+  AND ((spabhost.value = 'noarch') = (dpkg.architecture = 'noarch'))
   AND dpkg.repo IS NOT null
-  AND (dpkg.version IS NOT null OR (dpkg.category='bsp') = (trees.category='bsp'))
-GROUP BY dpkg.repo
+  AND (dpkg.version IS NOT null OR (dpkg.category = 'bsp') = (trees.category = 'bsp'))
+GROUP BY dpkg.repo, dpkg.reponame
 ) c2 ON c2.repo=c1.repo
 LEFT JOIN (
 SELECT reponame, sum(CASE WHEN dpp IS NULL THEN 1 ELSE 0 END) missing
@@ -505,19 +641,19 @@ FROM (
     packages.name package, dr.realname reponame, dr.category category,
     max(dp.package) dpp
   FROM packages
-  INNER JOIN dpkg_repos dr
   INNER JOIN trees ON trees.name = packages.tree
   INNER JOIN package_versions pv
     ON pv.package=packages.name AND pv.branch=trees.mainbranch
     AND pv.version IS NOT NULL
   LEFT JOIN package_spec spabhost
     ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
-  LEFT JOIN dpkg_packages dp ON dp.package=packages.name AND dp.repo=dr.name
-  WHERE ((spabhost.value IS 'noarch') = (dr.architecture IS 'noarch'))
+  LEFT JOIN dpkg_packages dp ON dp.package = packages.name
+  INNER JOIN dpkg_repos dr ON dp.repo = dr.name
+  WHERE ((spabhost.value = 'noarch') = (dr.architecture = 'noarch'))
   AND dr.category != 'overlay'
-  AND (dp.package IS NOT null OR (dr.category='bsp') = (trees.category='bsp'))
-  GROUP BY packages.name, dr.realname
-)
+  AND (dp.package IS NOT null OR (dr.category = 'bsp') = (trees.category = 'bsp'))
+  GROUP BY packages.name, dr.realname, dr.category
+) AS pkgs
 GROUP BY reponame
 ) c3 ON c3.reponame=c1.reponame AND c1.testing=0
 LEFT JOIN (
@@ -527,16 +663,19 @@ LEFT JOIN (
     FROM dpkg_packages dp
     INNER JOIN dpkg_repos dr ON dr.name=dp.repo
     LEFT JOIN (
-      SELECT package, max(version COLLATE vercomp) version, architecture, repo
+      SELECT package, max_dpkgver(version) AS version, repo, architecture
       FROM dpkg_packages
       GROUP BY package, architecture, repo
-    ) dpnew USING (package, version, architecture, repo)
+    ) dpnew ON dp.package = dpnew.package AND
+               dp.version = dpnew.version AND
+               dp.architecture = dpnew.architecture AND
+               dp.repo = dpnew.repo
     LEFT JOIN packages ON packages.name = dp.package
     LEFT JOIN package_spec spabhost
       ON spabhost.package = dp.package AND spabhost.key = 'ABHOST'
     LEFT JOIN (
       SELECT dp.package, (dr.architecture = 'noarch') noarch,
-        max(dp.version COLLATE vercomp) version
+        max_dpkgver(dp.version) AS version
       FROM dpkg_packages dp
       INNER JOIN dpkg_repos dr ON dr.name=dp.repo
       GROUP BY dp.package, (dr.architecture = 'noarch')
@@ -544,7 +683,7 @@ LEFT JOIN (
     AND (dr.architecture != 'noarch') = dparch.noarch
     AND dparch.version=dpnew.version
     WHERE (dpnew.package IS NULL OR packages.name IS NULL
-    OR ((dr.architecture = 'noarch') = (spabhost.value IS NOT 'noarch')
+    OR ((dr.architecture = 'noarch') = (spabhost.value != 'noarch')
       AND dparch.package IS NULL))
     UNION ALL
     SELECT repo FROM dpkg_package_duplicate
@@ -556,7 +695,8 @@ ORDER BY c1.category, c1.reponame, c1.testing
 
 
 def stats_update(db):
-    db.execute(SQL_COUNT_REPO)
+    cur = db.cursor()
+    cur.execute(SQL_COUNT_REPO)
     db.commit()
 
 
@@ -636,7 +776,6 @@ def main(argv):
         update(
             db, _url_slash(args.mirror), args.branch, args.arch, args.local, args.force
         )
-    db.execute("PRAGMA optimize")
     if not args.no_stats:
         stats_update(db)
     db.commit()
