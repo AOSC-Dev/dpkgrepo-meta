@@ -20,7 +20,7 @@
 
 import os
 import lzma
-import sqlite3
+import psycopg2
 import hashlib
 import logging
 import calendar
@@ -554,19 +554,10 @@ def main(argv):
     parser.add_argument("-s", "--sources-list",
                         help="Use specified sources.list file as repo list."
                         )
-    parser.add_argument("dbfile", help="abbs database file")
+    parser.add_argument("dburl", help="abbs database url")
     args = parser.parse_args(argv)
 
-    db = sqlite3.connect(args.dbfile)
-    try:
-        db.enable_load_extension(True)
-        extpath = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), 'mod_vercomp.so'))
-        db.load_extension(extpath)
-    except sqlite3.OperationalError:
-        logging.error('mod_vercomp.so not found, run `make` first.')
-        sys.exit(1)
-    db.enable_load_extension(False)
+    db = psycopg2.connect(args.dburl)
     init_db(db, not args.no_stats)
     if args.sources_list:
         update_sources_list(

@@ -1,3 +1,5 @@
 # from deb822
 six
 chardet
+# from dpkgrepo
+psycopg2
