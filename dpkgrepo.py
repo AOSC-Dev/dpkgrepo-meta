@@ -648,7 +648,7 @@ FROM (
   LEFT JOIN package_spec spabhost
     ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
   LEFT JOIN dpkg_packages dp ON dp.package = packages.name
-  INNER JOIN dpkg_repos dr AND dp.repo = dr.name
+  INNER JOIN dpkg_repos dr ON dp.repo = dr.name
   WHERE ((coalesce(spabhost.value, '') = 'noarch') = (dr.architecture = 'noarch'))
   AND dr.category != 'overlay'
   AND (dp.package IS NOT null OR (dr.category = 'bsp') = (trees.category = 'bsp'))
@@ -686,6 +686,7 @@ LEFT JOIN (
     AND dparch.version=dpnew.version
     WHERE (dpnew.package IS NULL OR packages.name IS NULL
     OR ((dr.architecture = 'noarch') = (coalesce(spabhost.value, 'noarch') != 'noarch')
+      AND dparch.package IS NULL))
     UNION ALL
     SELECT repo FROM dpkg_package_duplicate
   ) q1
