@@ -583,28 +583,22 @@ SELECT
   dpkg_repos.name repo, dpkg_repos.realname reponame,
   dpkg_repos.testing testing, dpkg_repos.category category,
   count(packages.name) pkgcount,
-  (CASE WHEN count(packages.name) > 0
-   THEN sum(CASE WHEN packages.name IS NULL THEN 1 ELSE 0 END)
-   ELSE 0 END) ghost
+  sum(CASE WHEN packages.name IS NULL THEN 1 ELSE 0 END) ghost
 FROM dpkg_repos
 LEFT JOIN (
     SELECT DISTINCT dp.package, dp.repo, dr.realname reponame, dr.architecture
     FROM dpkg_packages dp
-    LEFT JOIN dpkg_repos dr ON dr.name=dp.repo
+    LEFT JOIN dpkg_repos dr ON dr.name = dp.repo
   ) dpkg
   ON dpkg.repo = dpkg_repos.name
 LEFT JOIN packages
   ON packages.name = dpkg.package
-LEFT JOIN package_spec spabhost
-  ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
-WHERE packages.name IS NULL
-OR ((spabhost.value = 'noarch') = (dpkg.architecture = 'noarch'))
 GROUP BY dpkg_repos.name
 ) c1
 LEFT JOIN (
 SELECT
   dpkg.repo repo, dpkg.reponame reponame,
-  sum((comparable_dpkgver(pkgver.fullver) > comparable_dpkgver(dpkg.version))::int) lagging
+  sum(CASE WHEN comparable_dpkgver(pkgver.fullver) > comparable_dpkgver(dpkg.version) THEN 1 ELSE 0 END) lagging
 FROM packages
 INNER JOIN (
     SELECT
@@ -616,8 +610,6 @@ INNER JOIN (
   ) pkgver
   ON pkgver.package = packages.name
 INNER JOIN trees ON trees.name = packages.tree
-LEFT JOIN package_spec spabhost
-  ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
 LEFT JOIN (
     SELECT
       dp_d.name package, dr.name repo, dr.realname reponame,
@@ -629,7 +621,6 @@ LEFT JOIN (
     GROUP BY dp_d.name, dr.name
   ) dpkg ON dpkg.package = packages.name
 WHERE pkgver.branch = dpkg.branch
-  AND ((spabhost.value = 'noarch') = (dpkg.architecture = 'noarch'))
   AND dpkg.repo IS NOT null
   AND (dpkg.version IS NOT null OR (dpkg.category = 'bsp') = (trees.category = 'bsp'))
 GROUP BY dpkg.repo, dpkg.reponame
@@ -647,9 +638,9 @@ FROM (
     AND pv.version IS NOT NULL
   LEFT JOIN package_spec spabhost
     ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
-  LEFT JOIN dpkg_packages dp ON dp.package = packages.name
-  INNER JOIN dpkg_repos dr ON dp.repo = dr.name
-  WHERE ((spabhost.value = 'noarch') = (dr.architecture = 'noarch'))
+  CROSS JOIN dpkg_repos dr
+  LEFT JOIN dpkg_packages dp ON dp.package = packages.name AND dp.repo = dr.name
+  WHERE (spabhost.value = 'noarch' AND dr.architecture = 'noarch') OR (spabhost.value is null AND dr.architecture != 'noarch')
   AND dr.category != 'overlay'
   AND (dp.package IS NOT null OR (dr.category = 'bsp') = (trees.category = 'bsp'))
   GROUP BY packages.name, dr.realname, dr.category
