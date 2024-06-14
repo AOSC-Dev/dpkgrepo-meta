@@ -344,8 +344,8 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
             return {}
         for repo in repos:
             cur.execute(
-                "UPDATE dpkg_repos SET origin=null, label=null, "
-                "codename=null, date=null, valid_until=null, description=null "
+                "UPDATE dpkg_repos SET origin = null, label = null, "
+                "codename = null, date = null, valid_until = null, description = null "
                 "WHERE name = %s",
                 (repo.name,),
             )
@@ -399,7 +399,7 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
         result_repos[repo.component, repo.architecture] = (repo, pkgpath, size, sha256)
         cur.execute(
             "INSERT INTO dpkg_repos VALUES "
-            "(%s,%s,%s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s) "
+            "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
             "ON CONFLICT (name) "
             "DO UPDATE SET "
             "realname = excluded.realname, "
@@ -434,8 +434,8 @@ def suite_update(db, mirror, suite, repos=None, local=False, force=False):
         )
     for repo in repo_dict.values():
         cur.execute(
-            "UPDATE dpkg_repos SET origin=null, label=null, "
-            "codename=null, date=null, valid_until=null, description=null "
+            "UPDATE dpkg_repos SET origin = null, label = null, "
+            "codename = null, date = null, valid_until = null, description = null "
             "WHERE name = %s",
             (repo.name,),
         )
@@ -475,8 +475,8 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
     cur = db.cursor()
     cur.execute("DELETE FROM dpkg_package_duplicate WHERE repo = %s", (repo.name,))
     cur.execute(
-        "SELECT package, version, architecture, repo FROM dpkg_packages"
-        " WHERE repo = %s",
+        "SELECT package, version, architecture, repo FROM dpkg_packages "
+        "WHERE repo = %s",
         (repo.name,),
     )
     packages_old = set(cur.fetchall())
@@ -663,9 +663,10 @@ LEFT JOIN (
     FROM dpkg_packages dp
     INNER JOIN dpkg_repos dr ON dr.name=dp.repo
     LEFT JOIN (
-      SELECT package, max_dpkgver(version) AS version, repo, architecture
+      SELECT DISTINCT ON (package, architecture, repo)
+          package, version, repo, architecture
       FROM dpkg_packages
-      GROUP BY package, architecture, repo
+      ORDER BY package, architecture, repo ASC, _vercomp DESC
     ) dpnew ON dp.package = dpnew.package AND
                dp.version = dpnew.version AND
                dp.architecture = dpnew.architecture AND
@@ -674,11 +675,12 @@ LEFT JOIN (
     LEFT JOIN package_spec spabhost
       ON spabhost.package = dp.package AND spabhost.key = 'ABHOST'
     LEFT JOIN (
-      SELECT dp.package, (dr.architecture = 'noarch') noarch,
-        max_dpkgver(dp.version) AS version
+      SELECT DISTINCT ON (dp.package, noarch)
+        dp.package, (dr.architecture = 'noarch') noarch,
+        dp.version AS version
       FROM dpkg_packages dp
-      INNER JOIN dpkg_repos dr ON dr.name=dp.repo
-      GROUP BY dp.package, (dr.architecture = 'noarch')
+               INNER JOIN dpkg_repos dr ON dr.name=dp.repo
+      ORDER BY dp.package, (dr.architecture = 'noarch') ASC, _vercomp DESC
     ) dparch ON dparch.package=dp.package
     AND (dr.architecture != 'noarch') = dparch.noarch
     AND dparch.version=dpnew.version
