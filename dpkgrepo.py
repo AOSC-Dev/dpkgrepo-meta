@@ -641,14 +641,14 @@ FROM (
     packages.name package, dr.realname reponame, dr.category category,
     max(dp.package) dpp
   FROM packages
+  INNER JOIN dpkg_repos dr ON TRUE
   INNER JOIN trees ON trees.name = packages.tree
   INNER JOIN package_versions pv
     ON pv.package=packages.name AND pv.branch=trees.mainbranch
     AND pv.version IS NOT NULL
   LEFT JOIN package_spec spabhost
     ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
-  LEFT JOIN dpkg_packages dp ON dp.package = packages.name
-  INNER JOIN dpkg_repos dr ON dp.repo = dr.name
+  LEFT JOIN dpkg_packages dp ON dp.package = packages.name AND dp.repo = dr.name
   WHERE ((coalesce(spabhost.value, '') = 'noarch') = (dr.architecture = 'noarch'))
   AND dr.category != 'overlay'
   AND (dp.package IS NOT null OR (dr.category = 'bsp') = (trees.category = 'bsp'))
