@@ -278,7 +278,7 @@ def init_db(db, with_stats=True):
             "  dp.version dpkg_version, "
             "  dp.repo repo, dr.realname reponame, "
             "  dr.architecture architecture, "
-            "  dr.suite branch "
+            "  dr.suite branch, dp._vercomp _vercomp "
             "FROM dpkg_packages dp "
             "LEFT JOIN dpkg_repos dr ON dp.repo = dr.name "
             "ORDER BY package, architecture, repo ASC, _vercomp DESC"
