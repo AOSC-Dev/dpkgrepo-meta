@@ -682,6 +682,13 @@ LEFT JOIN (
   GROUP BY repo
 ) c4 ON c4.repo=c1.repo
 ORDER BY c1.category, c1.reponame, c1.testing
+ON CONFLICT (repo)
+DO UPDATE SET
+packagecnt = excluded.packagecnt,
+ghostcnt = excluded.ghostcnt,
+laggingcnt = excluded.laggingcnt,
+missingcnt = excluded.missingcnt,
+oldcnt = excluded.oldcnt
 """
 
 
