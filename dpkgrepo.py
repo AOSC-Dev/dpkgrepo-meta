@@ -598,7 +598,7 @@ LEFT JOIN packages
 LEFT JOIN package_spec spabhost
   ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
 WHERE packages.name IS NULL
-OR ((spabhost.value = 'noarch' AND dpkg.architecture = 'noarch') OR (spabhost.value is null AND dpkg.architecture != 'noarch'))
+OR ((coalesce(spabhost.value, '') = 'noarch') = (dpkg.architecture = 'noarch'))
 GROUP BY dpkg_repos.name
 ) c1
 LEFT JOIN (
@@ -629,7 +629,7 @@ LEFT JOIN (
     GROUP BY dp_d.name, dr.name
   ) dpkg ON dpkg.package = packages.name
 WHERE pkgver.branch = dpkg.branch
-  AND ((spabhost.value = 'noarch' AND dpkg.architecture = 'noarch') OR (spabhost.value is null AND dpkg.architecture != 'noarch'))
+  AND ((coalesce(spabhost.value, '') = 'noarch') = (dpkg.architecture = 'noarch'))
   AND dpkg.repo IS NOT null
   AND (dpkg.version IS NOT null OR (dpkg.category = 'bsp') = (trees.category = 'bsp'))
 GROUP BY dpkg.repo, dpkg.reponame
@@ -647,9 +647,9 @@ FROM (
     AND pv.version IS NOT NULL
   LEFT JOIN package_spec spabhost
     ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
-  CROSS JOIN dpkg_repos dr
-  LEFT JOIN dpkg_packages dp ON dp.package = packages.name AND dp.repo = dr.name
-  WHERE (spabhost.value = 'noarch' AND dr.architecture = 'noarch') OR (spabhost.value is null AND dr.architecture != 'noarch')
+  LEFT JOIN dpkg_packages dp ON dp.package = packages.name
+  INNER JOIN dpkg_repos dr AND dp.repo = dr.name
+  WHERE ((coalesce(spabhost.value, '') = 'noarch') = (dr.architecture = 'noarch'))
   AND dr.category != 'overlay'
   AND (dp.package IS NOT null OR (dr.category = 'bsp') = (trees.category = 'bsp'))
   GROUP BY packages.name, dr.realname, dr.category
@@ -685,8 +685,7 @@ LEFT JOIN (
     AND (dr.architecture != 'noarch') = dparch.noarch
     AND dparch.version=dpnew.version
     WHERE (dpnew.package IS NULL OR packages.name IS NULL
-    OR (((spabhost.value = 'noarch' AND dr.architecture = 'noarch') OR (spabhost.value is null AND dr.architecture != 'noarch'))
-      AND dparch.package IS NULL))
+    OR ((dr.architecture = 'noarch') = (coalesce(spabhost.value, 'noarch') != 'noarch')
     UNION ALL
     SELECT repo FROM dpkg_package_duplicate
   ) q1
