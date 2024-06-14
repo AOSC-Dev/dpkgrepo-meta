@@ -594,7 +594,7 @@ LEFT JOIN (
   ) dpkg
   ON dpkg.repo = dpkg_repos.name
 LEFT JOIN packages
-  ON packages.name = dpkg.package
+  ON packages.name = regexp_replace(dpkg.package, '-dbg$', '')
 LEFT JOIN package_spec spabhost
   ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
 WHERE packages.name IS NULL
