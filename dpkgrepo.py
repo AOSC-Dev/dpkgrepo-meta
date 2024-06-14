@@ -109,66 +109,6 @@ def _url_slash(url):
 def init_db(db, with_stats=True):
     cur = db.cursor()
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS dpkg_repos ("
-        "name TEXT PRIMARY KEY,"  # key: bsp-sunxi-armel/testing
-        "realname TEXT,"  # group key: amd64, bsp-sunxi-armel
-        "source_tree TEXT,"  # abbs tree
-        "category TEXT,"  # base, bsp, overlay
-        "testing INTEGER,"  # 0, 1, 2
-        "suite TEXT,"  # stable, testing, explosive
-        "component TEXT,"  # main, bsp-sunxi, opt-avx2
-        "architecture TEXT,"  # amd64, all
-        "origin TEXT,"
-        "label TEXT,"
-        "codename TEXT,"
-        "date INTEGER,"
-        "valid_until INTEGER,"
-        "description TEXT"
-        ")"
-    )
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS dpkg_packages ("
-        "package TEXT,"
-        "version TEXT,"
-        "architecture TEXT,"
-        "repo TEXT,"
-        "maintainer TEXT,"
-        "installed_size BIGINT,"
-        "filename TEXT,"
-        "size BIGINT,"
-        "sha256 TEXT,"
-        # we have Section and Description in packages table
-        "PRIMARY KEY (package, version, architecture, repo)"
-        # 'FOREIGN KEY(package) REFERENCES packages(name)'
-        ")"
-    )
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS dpkg_package_dependencies ("
-        "package TEXT,"
-        "version TEXT,"
-        "architecture TEXT,"
-        "repo TEXT,"
-        "relationship TEXT,"
-        "value TEXT,"
-        "PRIMARY KEY (package, version, architecture, repo, relationship)"
-        # 'FOREIGN KEY(package) REFERENCES dpkg_packages(package)'
-        ")"
-    )
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS dpkg_package_duplicate ("
-        "package TEXT,"
-        "version TEXT,"
-        "architecture TEXT,"
-        "repo TEXT,"
-        "maintainer TEXT,"
-        "installed_size BIGINT,"
-        "filename TEXT,"
-        "size BIGINT,"
-        "sha256 TEXT,"
-        "PRIMARY KEY (repo, filename)"
-        ")"
-    )
-    cur.execute(
         """
         -- prepend length to input e.g. 10 -> 110, 100 -> 2100
         CREATE OR REPLACE FUNCTION public._comparable_digit (digit text)
@@ -257,6 +197,67 @@ def init_db(db, with_stats=True):
         );
                 """
     )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS dpkg_repos ("
+        "name TEXT PRIMARY KEY,"  # key: bsp-sunxi-armel/testing
+        "realname TEXT,"  # group key: amd64, bsp-sunxi-armel
+        "source_tree TEXT,"  # abbs tree
+        "category TEXT,"  # base, bsp, overlay
+        "testing INTEGER,"  # 0, 1, 2
+        "suite TEXT,"  # stable, testing, explosive
+        "component TEXT,"  # main, bsp-sunxi, opt-avx2
+        "architecture TEXT,"  # amd64, all
+        "origin TEXT,"
+        "label TEXT,"
+        "codename TEXT,"
+        "date INTEGER,"
+        "valid_until INTEGER,"
+        "description TEXT"
+        ")"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS dpkg_packages ("
+        "package TEXT,"
+        "version TEXT,"
+        "architecture TEXT,"
+        "repo TEXT,"
+        "maintainer TEXT,"
+        "installed_size BIGINT,"
+        "filename TEXT,"
+        "size BIGINT,"
+        "sha256 TEXT,"
+        "_vercomp TEXT GENERATED ALWAYS AS (comparable_dpkgver(version)) STORED,"
+        # we have Section and Description in packages table
+        "PRIMARY KEY (package, version, architecture, repo)"
+        # 'FOREIGN KEY(package) REFERENCES packages(name)'
+        ")"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS dpkg_package_dependencies ("
+        "package TEXT,"
+        "version TEXT,"
+        "architecture TEXT,"
+        "repo TEXT,"
+        "relationship TEXT,"
+        "value TEXT,"
+        "PRIMARY KEY (package, version, architecture, repo, relationship)"
+        # 'FOREIGN KEY(package) REFERENCES dpkg_packages(package)'
+        ")"
+    )
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS dpkg_package_duplicate ("
+        "package TEXT,"
+        "version TEXT,"
+        "architecture TEXT,"
+        "repo TEXT,"
+        "maintainer TEXT,"
+        "installed_size BIGINT,"
+        "filename TEXT,"
+        "size BIGINT,"
+        "sha256 TEXT,"
+        "PRIMARY KEY (repo, filename)"
+        ")"
+    )
     if with_stats:
         cur.execute(
             "CREATE TABLE IF NOT EXISTS dpkg_repo_stats ("
@@ -272,14 +273,15 @@ def init_db(db, with_stats=True):
         cur.execute("DROP VIEW IF EXISTS v_dpkg_packages_new")
         cur.execute(
             "CREATE OR REPLACE VIEW v_dpkg_packages_new AS "
-            "SELECT dp.package package, "
-            "  max_dpkgver(version) dpkg_version, "
+            "SELECT DISTINCT ON (package, architecture, repo) "
+            "  dp.package package, "
+            "  dp.version dpkg_version, "
             "  dp.repo repo, dr.realname reponame, "
             "  dr.architecture architecture, "
             "  dr.suite branch "
             "FROM dpkg_packages dp "
-            "LEFT JOIN dpkg_repos dr ON dr.name=dp.repo "
-            "GROUP BY package, repo, reponame, dr.architecture, branch"
+            "LEFT JOIN dpkg_repos dr ON dp.repo = dr.name "
+            "ORDER BY package, architecture, repo ASC, _vercomp DESC"
         )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_dpkg_repos" " ON dpkg_repos (realname)")
     cur.execute(
