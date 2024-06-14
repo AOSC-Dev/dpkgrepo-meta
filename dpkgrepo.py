@@ -593,6 +593,10 @@ LEFT JOIN (
   ON dpkg.repo = dpkg_repos.name
 LEFT JOIN packages
   ON packages.name = dpkg.package
+LEFT JOIN package_spec spabhost
+  ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
+WHERE packages.name IS NULL
+OR ((spabhost.value = 'noarch' AND dpkg.architecture = 'noarch') OR (spabhost.value is null AND dpkg.architecture != 'noarch'))
 GROUP BY dpkg_repos.name
 ) c1
 LEFT JOIN (
@@ -610,6 +614,8 @@ INNER JOIN (
   ) pkgver
   ON pkgver.package = packages.name
 INNER JOIN trees ON trees.name = packages.tree
+LEFT JOIN package_spec spabhost
+  ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
 LEFT JOIN (
     SELECT
       dp_d.name package, dr.name repo, dr.realname reponame,
@@ -621,6 +627,7 @@ LEFT JOIN (
     GROUP BY dp_d.name, dr.name
   ) dpkg ON dpkg.package = packages.name
 WHERE pkgver.branch = dpkg.branch
+  AND ((spabhost.value = 'noarch' AND dpkg.architecture = 'noarch') OR (spabhost.value is null AND dpkg.architecture != 'noarch'))
   AND dpkg.repo IS NOT null
   AND (dpkg.version IS NOT null OR (dpkg.category = 'bsp') = (trees.category = 'bsp'))
 GROUP BY dpkg.repo, dpkg.reponame
@@ -674,7 +681,7 @@ LEFT JOIN (
     AND (dr.architecture != 'noarch') = dparch.noarch
     AND dparch.version=dpnew.version
     WHERE (dpnew.package IS NULL OR packages.name IS NULL
-    OR ((dr.architecture = 'noarch') = (spabhost.value != 'noarch')
+    OR (((spabhost.value = 'noarch' AND dr.architecture = 'noarch') OR (spabhost.value is null AND dr.architecture != 'noarch'))
       AND dparch.package IS NULL))
     UNION ALL
     SELECT repo FROM dpkg_package_duplicate
