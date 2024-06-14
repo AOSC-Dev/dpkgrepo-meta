@@ -579,12 +579,31 @@ def package_update(db, mirror, repo, path, size, sha256, local=False):
 
 SQL_COUNT_REPO = """
 INSERT INTO dpkg_repo_stats
-SELECT c1.repo repo, pkgcount, ghost, lagging, missing, coalesce(olddebcnt, 0)
+SELECT c0.repo repo, pkgcount, ghost, lagging, missing, coalesce(olddebcnt, 0)
 FROM (
 SELECT
   dpkg_repos.name repo, dpkg_repos.realname reponame,
   dpkg_repos.testing testing, dpkg_repos.category category,
-  count(packages.name) pkgcount,
+  count(packages.name) pkgcount
+FROM dpkg_repos
+LEFT JOIN (
+    SELECT DISTINCT dp.package, dp.repo, dr.realname reponame, dr.architecture
+    FROM dpkg_packages dp
+    LEFT JOIN dpkg_repos dr ON dr.name = dp.repo
+  ) dpkg
+  ON dpkg.repo = dpkg_repos.name
+LEFT JOIN packages
+  ON packages.name = dpkg.package
+LEFT JOIN package_spec spabhost
+  ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
+WHERE packages.name IS NULL
+OR ((coalesce(spabhost.value, '') = 'noarch') = (dpkg.architecture = 'noarch'))
+GROUP BY dpkg_repos.name
+) c0
+LEFT JOIN (
+SELECT
+  dpkg_repos.name repo, dpkg_repos.realname reponame,
+  dpkg_repos.testing testing, dpkg_repos.category category,
   sum(CASE WHEN packages.name IS NULL THEN 1 ELSE 0 END) ghost
 FROM dpkg_repos
 LEFT JOIN (
@@ -600,7 +619,7 @@ LEFT JOIN package_spec spabhost
 WHERE packages.name IS NULL
 OR ((coalesce(spabhost.value, '') = 'noarch') = (dpkg.architecture = 'noarch'))
 GROUP BY dpkg_repos.name
-) c1
+) c1 ON c1.repo = c0.repo
 LEFT JOIN (
 SELECT
   dpkg.repo repo, dpkg.reponame reponame,
