@@ -622,7 +622,7 @@ GROUP BY dpkg_repos.name
 LEFT JOIN (
 SELECT
   dpkg.repo repo, dpkg.reponame reponame,
-  sum(CASE WHEN comparable_dpkgver(pkgver.fullver) > comparable_dpkgver(dpkg.version) THEN 1 ELSE 0 END) lagging
+  sum(CASE WHEN comparable_dpkgver(pkgver.fullver) > dpkg._vercomp THEN 1 ELSE 0 END) lagging
 FROM packages
 INNER JOIN (
     SELECT
@@ -637,14 +637,14 @@ INNER JOIN trees ON trees.name = packages.tree
 LEFT JOIN package_spec spabhost
   ON spabhost.package = packages.name AND spabhost.key = 'ABHOST'
 LEFT JOIN (
-    SELECT
+    SELECT DISTINCT ON (dp_d.name, dr.name)
       dp_d.name package, dr.name repo, dr.realname reponame,
-      max_dpkgver(dp.version) AS version, dr.category category,
+      dp.version AS version, dp._vercomp AS _vercomp, dr.category category,
       dr.architecture architecture, dr.suite branch
     FROM packages dp_d
     LEFT JOIN dpkg_packages dp ON dp.package = dp_d.name
     INNER JOIN dpkg_repos dr ON dp.repo = dr.name
-    GROUP BY dp_d.name, dr.name
+    ORDER BY dp_d.name, dr.name ASC, dp._vercomp DESC
   ) dpkg ON dpkg.package = packages.name
 WHERE pkgver.branch = dpkg.branch
   AND ((coalesce(spabhost.value, '') = 'noarch') = (dpkg.architecture = 'noarch'))
@@ -722,6 +722,7 @@ oldcnt = excluded.oldcnt
 
 
 def stats_update(db):
+    logging.info("updating dpkg repo stats")
     cur = db.cursor()
     cur.execute(SQL_COUNT_REPO)
     db.commit()
@@ -805,7 +806,9 @@ def main(argv):
         )
     if not args.no_stats:
         stats_update(db)
+
     # refresh materialized view
+    logging.info("refreshing new dpkg packages")
     cur = db.cursor()
     cur.execute("REFRESH MATERIALIZED VIEW v_dpkg_packages_new;")
     db.commit()
