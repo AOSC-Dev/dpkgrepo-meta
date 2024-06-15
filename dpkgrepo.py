@@ -270,9 +270,8 @@ def init_db(db, with_stats=True):
             "FOREIGN KEY(repo) REFERENCES dpkg_repos(name)"
             ")"
         )
-        cur.execute("DROP VIEW IF EXISTS v_dpkg_packages_new")
         cur.execute(
-            "CREATE MATERIALIZED VIEW v_dpkg_packages_new AS "
+            "CREATE MATERIALIZED VIEW IF NOT EXISTS v_dpkg_packages_new AS "
             "SELECT DISTINCT ON (package, architecture, repo) "
             "  dp.package package, "
             "  dp.version dpkg_version, "
