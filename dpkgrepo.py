@@ -272,7 +272,7 @@ def init_db(db, with_stats=True):
         )
         cur.execute("DROP VIEW IF EXISTS v_dpkg_packages_new")
         cur.execute(
-            "CREATE OR REPLACE VIEW v_dpkg_packages_new AS "
+            "CREATE MATERIALIZED VIEW v_dpkg_packages_new AS "
             "SELECT DISTINCT ON (package, architecture, repo) "
             "  dp.package package, "
             "  dp.version dpkg_version, "
@@ -806,6 +806,9 @@ def main(argv):
         )
     if not args.no_stats:
         stats_update(db)
+    # refresh materialized view
+    cur = db.cursor()
+    cur.execute("REFRESH MATERIALIZED VIEW v_dpkg_packages_new;")
     db.commit()
 
 
