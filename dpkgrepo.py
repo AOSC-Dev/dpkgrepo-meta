@@ -627,9 +627,7 @@ FROM packages
 INNER JOIN (
     SELECT
       package, branch,
-      ((CASE WHEN coalesce(epoch, '') = '' THEN '' ELSE epoch || ':' END) ||
-       version || (CASE WHEN coalesce(release, '') IN ('', '0') THEN '' ELSE '-'
-       || release END)) fullver
+      full_version AS fullver
     FROM package_versions
   ) pkgver
   ON pkgver.package = packages.name
